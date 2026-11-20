@@ -46,6 +46,10 @@ def temizle(df):
     - tarihe gore siralar, tekrar eden gunlerden sonuncusunu tutar
     - kapanisi bos veya sifir/negatif olan gunleri atar
     - yuksek < dusuk gibi tutarsiz satirlari atar
+    - tatil dolgularini atar: Yahoo borsanin kapali oldugu gunler (bayram, yilbasi)
+      icin hacmi 0, acilis=yuksek=dusuk=kapanis olan satirlar uretiyor. Bunlar kalirsa
+      backtest bu gunleri "fiyati oynamayan islem gunu" sayar: volatilite dusuk,
+      Sharpe yuksek cikar ve strateji borsanin kapali oldugu gun islem yapabilir.
     - uzun veri bosluklarini uyari olarak raporlar (atmaz)
     """
     uyarilar = []
@@ -64,6 +68,12 @@ def temizle(df):
     if tutarsiz.any():
         uyarilar.append(f"{tutarsiz.sum()} gun yuksek < dusuk oldugu icin silindi")
         df = df[~tutarsiz]
+
+    dolgu = ((df["hacim"] == 0) & (df["acilis"] == df["kapanis"])
+             & (df["yuksek"] == df["kapanis"]) & (df["dusuk"] == df["kapanis"]))
+    if dolgu.any():
+        uyarilar.append(f"{dolgu.sum()} tatil dolgusu gun silindi (hacim 0, fiyat sabit)")
+        df = df[~dolgu]
 
     if len(df) > 1:
         araliklar = df.index.to_series().diff().dt.days
