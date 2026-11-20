@@ -88,3 +88,20 @@ def test_yukle_onbellek(tmp_path):
 def test_yukle_bos_veri_anlasilir_hata(tmp_path):
     with pytest.raises(ValueError, match=r"\.IS"):
         yukle("THYAO", "2024-01-01", "2024-02-01", indirici=lambda *a: pd.DataFrame(), klasor=tmp_path)
+
+
+def test_tatil_dolgusu_silinir():
+    """Gercek THYAO verisinde gorulen durum: bayramda hacim 0 ve sabit fiyatli satirlar."""
+    df = standart(yahoo_cerceve(gun=6))
+    for i in (2, 3):
+        onceki = df["kapanis"].iloc[1]
+        df.iloc[i] = [onceki, onceki, onceki, onceki, 0]
+    temiz, uyarilar = temizle(df)
+    assert len(temiz) == 4 and any("tatil dolgusu" in u for u in uyarilar)
+
+
+def test_hacmi_sifir_ama_fiyati_oynayan_gun_kalir():
+    """Hacim verisi eksik ama fiyat hareketi olan gun gercek islem gunudur, silinmez."""
+    df = standart(yahoo_cerceve(gun=5))
+    df.iloc[2, df.columns.get_loc("hacim")] = 0
+    assert len(temizle(df)[0]) == 5
