@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.motor import backtest, pozisyon_hesapla
+from src.motor import MALIYETSIZ, Maliyet, backtest, pozisyon_hesapla
 from src.strateji import AlTut, HareketliOrtalama, Strateji
 
 
@@ -43,7 +43,7 @@ def test_elle_hesaplanan_ornek():
        gun 3: satis acilista: gece 106 -> 108  = 108/106
     """
     df = veri([100, 102, 110, 108, 100], [101, 105, 106, 104, 99])
-    r = backtest(df, Sabit([1, 1, 0, 0, 0]), sermaye=1000)
+    r = backtest(df, Sabit([1, 1, 0, 0, 0]), sermaye=1000, maliyet=MALIYETSIZ)
     beklenen = 1000 * 105 / 102 * 106 / 105 * 108 / 106
     assert r.sermaye.iloc[-1] == pytest.approx(beklenen)
     assert r.toplam_getiri == pytest.approx(108 / 102 - 1)
@@ -55,14 +55,14 @@ def test_kapanistan_islem_yapilmaz():
     """Sinyal gununun kapanisindan alim yapilsaydi gun 1'in tamami (101->105) kazanilirdi.
     Motor acilistan (102) alir; aradaki fark lookahead kazancidir."""
     df = veri([100, 102, 110], [101, 105, 106])
-    r = backtest(df, Sabit([1, 0, 0]), sermaye=1)
+    r = backtest(df, Sabit([1, 0, 0]), sermaye=1, maliyet=MALIYETSIZ)
     assert r.sermaye.iloc[-1] == pytest.approx(105 / 102 * 110 / 105)
     assert r.sermaye.iloc[-1] != pytest.approx(105 / 101 * 110 / 105)
 
 
 def test_al_tut_ikinci_gun_acilistan_sona_kadar():
     df = rastgele_veri()
-    r = backtest(df, AlTut(), sermaye=1)
+    r = backtest(df, AlTut(), sermaye=1, maliyet=MALIYETSIZ)
     assert r.sermaye.iloc[-1] == pytest.approx(df["kapanis"].iloc[-1] / df["acilis"].iloc[1])
     assert r.islem_sayisi == 1 and bool(r.islemler["acik"].iloc[0])
 
@@ -73,8 +73,11 @@ def test_hic_islem_yoksa_sermaye_sabit():
 
 
 def test_islem_getirileri_sermaye_ile_tutarli():
-    """Maliyetsizken islem getirilerinin carpimi toplam getiriye esit olmali."""
+    """Islem getirilerinin carpimi toplam getiriye esit olmali (maliyetli ve maliyetsiz)."""
     df = rastgele_veri()
+    r = backtest(df, HareketliOrtalama(5, 20), sermaye=1, maliyet=MALIYETSIZ)
+    assert r.islem_sayisi > 3
+    assert (1 + r.islemler["getiri"]).prod() == pytest.approx(r.sermaye.iloc[-1])
     r = backtest(df, HareketliOrtalama(5, 20), sermaye=1)
     assert r.islem_sayisi > 3
     assert (1 + r.islemler["getiri"]).prod() == pytest.approx(r.sermaye.iloc[-1])
@@ -99,3 +102,37 @@ def test_gecersiz_girdiler():
         backtest(veri([1.0], [1.0]), AlTut())
     with pytest.raises(ValueError, match="Sermaye"):
         backtest(rastgele_veri(10), AlTut(), sermaye=0)
+
+
+def test_maliyet_elle_hesap():
+    """Ayni 5 gunluk ornek, islem basi %0.2 maliyetle: alis ve satis acilista kesilir."""
+    df = veri([100, 102, 110, 108, 100], [101, 105, 106, 104, 99])
+    m = Maliyet(komisyon=0.002, bsmv=0, kayma=0)
+    r = backtest(df, Sabit([1, 1, 0, 0, 0]), sermaye=1000, maliyet=m)
+    assert r.sermaye.iloc[-1] == pytest.approx(1000 * 0.998 * 108 / 102 * 0.998)
+    assert r.odenen_maliyet == pytest.approx(1000 * 0.002 + 1000 * 0.998 * 108 / 102 * 0.002)
+
+
+def test_islem_basi_maliyet():
+    assert Maliyet(komisyon=0.001, bsmv=0.05, kayma=0.0005).islem_basi == pytest.approx(0.00155)
+
+
+def test_maliyet_sik_islem_yapani_daha_cok_vurur():
+    """Ayni veride cok islem yapan strateji maliyetten daha fazla kaybetmeli."""
+    df = rastgele_veri(500)
+    def kayip(s):
+        return backtest(df, s, maliyet=MALIYETSIZ).toplam_getiri - backtest(df, s).toplam_getiri
+    hizli, yavas = HareketliOrtalama(2, 5), HareketliOrtalama(50, 200)
+    assert backtest(df, hizli).islem_sayisi > 5 * max(1, backtest(df, yavas).islem_sayisi)
+    assert kayip(hizli) > kayip(yavas) > 0
+
+
+def test_maliyet_islem_yoksa_sifir():
+    r = backtest(rastgele_veri(50), Sabit([0] * 50))
+    assert r.odenen_maliyet == 0 and r.toplam_getiri == 0
+
+
+@pytest.mark.parametrize("alan", ["komisyon", "bsmv", "kayma"])
+def test_gecersiz_maliyet(alan):
+    with pytest.raises(ValueError, match=alan):
+        Maliyet(**{alan: -0.1})
